@@ -1,0 +1,1179 @@
+name: Build Timer Clicker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/build-timerclicker.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Принять лицензии Android SDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+
+      - name: Создать проект
+        run: |
+          mkdir -p app
+          cat > app/build.gradle <<'FILE_0_END'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.mushka.timerclicker'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.mushka.timerclicker"
+                  minSdk 26
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          tasks.withType(JavaCompile).configureEach {
+              options.encoding = 'UTF-8'
+          }
+          FILE_0_END
+          cat > build.gradle <<'FILE_1_END'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          FILE_1_END
+          cat > gradle.properties <<'FILE_2_END'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          FILE_2_END
+          cat > settings.gradle <<'FILE_3_END'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "TimerClicker"
+          include ':app'
+          FILE_3_END
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'FILE_4_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+              <application
+                  android:allowBackup="false"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="Тайм-кликер (Пекин)"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <service
+                      android:name=".TimerService"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="scheduled_tap" />
+                  </service>
+
+                  <service
+                      android:name=".TapService"
+                      android:exported="true"
+                      android:label="Тайм-кликер"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/tap_service" />
+                  </service>
+              </application>
+          </manifest>
+          FILE_4_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/Cfg.java <<'FILE_5_END'
+          package com.mushka.timerclicker;
+
+          import android.content.Context;
+          import android.content.SharedPreferences;
+
+          import java.util.Date;
+
+          public class Cfg {
+              private final SharedPreferences p;
+
+              public Cfg(Context c) {
+                  p = c.getSharedPreferences("tc", Context.MODE_PRIVATE);
+              }
+
+              long offset() {
+                  return p.getLong("off", 0);
+              }
+
+              void setOffset(long v) {
+                  p.edit().putLong("off", v).apply();
+              }
+
+              /** Точное «сейчас» с учётом поправки часов. */
+              long now() {
+                  return System.currentTimeMillis() + offset();
+              }
+
+              String date() {
+                  return p.getString("date", TimeUtil.date(now()));
+              }
+
+              String time() {
+                  return p.getString("time", "10:00:00");
+              }
+
+              int ms() {
+                  return p.getInt("ms", 0);
+              }
+
+              int count() {
+                  return Math.max(1, p.getInt("n", 1));
+              }
+
+              int gap() {
+                  return Math.max(1, p.getInt("gap", 100));
+              }
+
+              int lead() {
+                  return Math.max(0, p.getInt("lead", 30));
+              }
+
+              boolean hasPoint() {
+                  return p.contains("x") && p.contains("y");
+              }
+
+              int x() {
+                  return p.getInt("x", 0);
+              }
+
+              int y() {
+                  return p.getInt("y", 0);
+              }
+
+              void setPoint(int x, int y) {
+                  p.edit().putInt("x", x).putInt("y", y).apply();
+              }
+
+              void setTarget(long ms) {
+                  p.edit().putString("date", TimeUtil.date(ms)).putString("time", TimeUtil.time(ms))
+                          .putInt("ms", (int) (ms % 1000)).apply();
+              }
+
+              void saveFields(String date, String time, int ms, int n, int gap, int lead) {
+                  p.edit().putString("date", date).putString("time", time).putInt("ms", ms)
+                          .putInt("n", n).putInt("gap", gap).putInt("lead", lead).apply();
+              }
+
+              long target() throws java.text.ParseException {
+                  return TimeUtil.parse(date(), time(), ms());
+              }
+          }
+          FILE_5_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/MainActivity.java <<'FILE_6_END'
+          package com.mushka.timerclicker;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.pm.PackageManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.provider.Settings;
+          import android.text.InputType;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+              private final Handler h = new Handler(Looper.getMainLooper());
+              private Cfg cfg;
+              private TextView clock;
+              private TextView syncLabel;
+              private TextView status;
+              private EditText dateEt;
+              private EditText timeEt;
+              private EditText msEt;
+              private EditText nEt;
+              private EditText gapEt;
+              private EditText leadEt;
+              private boolean askedNotifications = false;
+              private boolean ticking;
+
+              private final Runnable tick = new Runnable() {
+                  @Override
+                  public void run() {
+                      if (!ticking) {
+                          return;
+                      }
+                      clock.setText("Пекин (UTC+8)\n" + TimeUtil.full(cfg.now()));
+                      h.postDelayed(this, 50);
+                  }
+              };
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  cfg = new Cfg(this);
+                  LinearLayout root = Ui.column(this);
+
+                  root.addView(Ui.text(this, "Тайм-кликер (Пекин)", 26));
+                  root.addView(Ui.text(this, "Нажимает на выбранную кнопку в точное время по Пекину.", 15));
+
+                  clock = Ui.text(this, "", 20);
+                  root.addView(clock);
+                  syncLabel = Ui.text(this, "", 13);
+                  root.addView(syncLabel);
+                  Button sync = Ui.button(this, "Синхронизировать время (NTP)");
+                  sync.setOnClickListener(v -> doSync());
+                  root.addView(sync);
+
+                  root.addView(Ui.text(this, "Когда нажать (по Пекину)", 17));
+                  dateEt = field("Дата ГГГГ-ММ-ДД", cfg.date(), InputType.TYPE_CLASS_DATETIME);
+                  timeEt = field("Время ЧЧ:ММ:СС", cfg.time(), InputType.TYPE_CLASS_DATETIME);
+                  msEt = field("Миллисекунды (0-999)", String.valueOf(cfg.ms()), InputType.TYPE_CLASS_NUMBER);
+                  root.addView(dateEt);
+                  root.addView(timeEt);
+                  root.addView(msEt);
+
+                  LinearLayout quick = new LinearLayout(this);
+                  quick.setOrientation(LinearLayout.HORIZONTAL);
+                  Button m1 = Ui.button(this, "Через 1 мин");
+                  m1.setOnClickListener(v -> setIn(60000));
+                  Button m5 = Ui.button(this, "Через 5 мин");
+                  m5.setOnClickListener(v -> setIn(300000));
+                  quick.addView(m1);
+                  quick.addView(m5);
+                  root.addView(quick);
+
+                  root.addView(Ui.text(this, "Нажатия", 17));
+                  nEt = field("Сколько раз нажать", String.valueOf(cfg.count()), InputType.TYPE_CLASS_NUMBER);
+                  gapEt = field("Пауза между нажатиями, мс", String.valueOf(cfg.gap()), InputType.TYPE_CLASS_NUMBER);
+                  leadEt = field("Опережение, мс (нажать раньше на столько)", String.valueOf(cfg.lead()), InputType.TYPE_CLASS_NUMBER);
+                  root.addView(nEt);
+                  root.addView(gapEt);
+                  root.addView(leadEt);
+
+                  status = Ui.text(this, "", 14);
+                  root.addView(status);
+
+                  Button acc = Ui.button(this, "1. Включить службу доступности");
+                  acc.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+                  root.addView(acc);
+                  root.addView(Ui.text(this, "Если переключатель серый: Настройки, Приложения, Тайм-кликер, значок ⋮, «Разрешить ограниченные настройки».", 13));
+
+                  Button go = Ui.button(this, "2. Запустить панель");
+                  go.setOnClickListener(v -> startPanel());
+                  root.addView(go);
+
+                  root.addView(Ui.text(this, "Порядок: 1) задай время и нажми «Запустить панель»; 2) открой нужное приложение на нужной странице; 3) на панели нажми «Точка» и коснись кнопки; 4) нажми «Старт». Экран должен оставаться включённым и разблокированным. Проверь настройку заранее кнопкой «Через 1 мин»: панель покажет, на сколько мс первое нажатие отличилось от цели. Это значение подскажет, какое «Опережение» поставить.", 14));
+                  setContentView(Ui.scroll(this, root));
+              }
+
+              private EditText field(String hint, String value, int type) {
+                  EditText e = new EditText(this);
+                  e.setHint(hint);
+                  e.setHintTextColor(0xFF777777);
+                  e.setTextColor(0xFFFFFFFF);
+                  e.setInputType(type);
+                  e.setText(value);
+                  return e;
+              }
+
+              private int num(EditText e, int def) {
+                  try {
+                      return Integer.parseInt(e.getText().toString().trim());
+                  } catch (Exception ex) {
+                      return def;
+                  }
+              }
+
+              private void setIn(long ms) {
+                  long t = cfg.now() + ms;
+                  cfg.setTarget(t - t % 1000);
+                  dateEt.setText(cfg.date());
+                  timeEt.setText(cfg.time());
+                  msEt.setText("0");
+              }
+
+              private void saveFields() {
+                  cfg.saveFields(dateEt.getText().toString().trim(), timeEt.getText().toString().trim(),
+                          Math.max(0, Math.min(999, num(msEt, 0))), Math.max(1, num(nEt, 1)),
+                          Math.max(1, num(gapEt, 100)), Math.max(0, num(leadEt, 30)));
+              }
+
+              private void doSync() {
+                  syncLabel.setText("Синхронизация...");
+                  new Thread(() -> {
+                      final long o = Ntp.sync();
+                      runOnUiThread(() -> {
+                          if (o == Ntp.FAIL) {
+                              syncLabel.setText("Не удалось связаться с серверами времени. Проверь интернет.");
+                          } else {
+                              cfg.setOffset(o);
+                              showSync();
+                          }
+                      });
+                  }).start();
+              }
+
+              private void showSync() {
+                  syncLabel.setText("Часы телефона " + (cfg.offset() >= 0 ? "отстают" : "спешат") + " на "
+                          + Math.abs(cfg.offset()) + " мс" + (Ntp.lastHost.isEmpty() ? "" : " (сервер " + Ntp.lastHost + ")")
+                          + ". Поправка применена.");
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  ticking = true;
+                  h.post(tick);
+                  showSync();
+                  status.setText("Служба доступности: " + (TapService.inst != null ? "включена" : "выключена")
+                          + "\nПоверх других окон: " + (Settings.canDrawOverlays(this) ? "разрешено" : "не разрешено")
+                          + "\nПанель: " + (TimerService.inst != null ? "запущена" : "не запущена")
+                          + "\nКнопка: " + (cfg.hasPoint() ? cfg.x() + ", " + cfg.y() : "не выбрана"));
+              }
+
+              @Override
+              protected void onPause() {
+                  super.onPause();
+                  ticking = false;
+                  saveFields();
+              }
+
+              private void startPanel() {
+                  saveFields();
+                  try {
+                      long t = cfg.target();
+                      if (t < cfg.now()) {
+                          Toast.makeText(this, "Указанное время уже прошло, поставь новое", Toast.LENGTH_LONG).show();
+                      }
+                  } catch (Exception e) {
+                      Toast.makeText(this, "Неверная дата или время. Формат: 2026-10-12 и 10:00:00", Toast.LENGTH_LONG).show();
+                      return;
+                  }
+                  if (TapService.inst == null) {
+                      Toast.makeText(this, "Сначала включи службу доступности «Тайм-кликер»", Toast.LENGTH_LONG).show();
+                      startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                      return;
+                  }
+                  if (!Settings.canDrawOverlays(this)) {
+                      Toast.makeText(this, "Разреши показ поверх других окон, вернись и нажми «Запустить панель» снова", Toast.LENGTH_LONG).show();
+                      startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
+                      return;
+                  }
+                  if (Build.VERSION.SDK_INT >= 33 && !askedNotifications
+                          && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                      askedNotifications = true;
+                      requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7);
+                      return;
+                  }
+                  startForegroundService(new Intent(this, TimerService.class));
+                  moveTaskToBack(true);
+              }
+
+              @Override
+              public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+                  super.onRequestPermissionsResult(code, perms, results);
+                  startPanel();
+              }
+          }
+          FILE_6_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/Ntp.java <<'FILE_7_END'
+          package com.mushka.timerclicker;
+
+          import java.net.DatagramPacket;
+          import java.net.DatagramSocket;
+          import java.net.InetAddress;
+
+          /** Простой SNTP-клиент: считает, насколько часы телефона отстают от точного времени. */
+          final class Ntp {
+              static final long FAIL = Long.MIN_VALUE;
+              static volatile String lastHost = "";
+              private static final String[] HOSTS = {"ntp.aliyun.com", "cn.pool.ntp.org", "time.windows.com", "pool.ntp.org"};
+
+              private Ntp() {
+              }
+
+              /** Возвращает поправку в мс (точное время минус время телефона) или FAIL. */
+              static long sync() {
+                  for (String host : HOSTS) {
+                      try {
+                          long off = query(host, 123, 1500);
+                          lastHost = host;
+                          return off;
+                      } catch (Exception ignored) {
+                      }
+                  }
+                  return FAIL;
+              }
+
+              static long query(String host, int port, int timeoutMs) throws Exception {
+                  byte[] buf = new byte[48];
+                  buf[0] = 0x1B;
+                  DatagramSocket s = new DatagramSocket();
+                  try {
+                      s.setSoTimeout(timeoutMs);
+                      InetAddress a = InetAddress.getByName(host);
+                      long t0 = System.currentTimeMillis();
+                      s.send(new DatagramPacket(buf, buf.length, a, port));
+                      DatagramPacket r = new DatagramPacket(buf, buf.length);
+                      s.receive(r);
+                      long t3 = System.currentTimeMillis();
+                      long t1 = stamp(buf, 32);
+                      long t2 = stamp(buf, 40);
+                      if (t1 <= 0 || t2 <= 0) {
+                          throw new Exception("empty reply");
+                      }
+                      long off = ((t1 - t0) + (t2 - t3)) / 2;
+                      if (Math.abs(off) > 86400000L) {
+                          throw new Exception("bad offset");
+                      }
+                      return off;
+                  } finally {
+                      s.close();
+                  }
+              }
+
+              static long stamp(byte[] b, int o) {
+                  long sec = 0;
+                  long frac = 0;
+                  for (int i = 0; i < 4; i++) {
+                      sec = (sec << 8) | (b[o + i] & 0xFF);
+                  }
+                  for (int i = 4; i < 8; i++) {
+                      frac = (frac << 8) | (b[o + i] & 0xFF);
+                  }
+                  if (sec == 0) {
+                      return 0;
+                  }
+                  return (sec - 2208988800L) * 1000L + ((frac * 1000L) >> 32);
+              }
+          }
+          FILE_7_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/TapService.java <<'FILE_8_END'
+          package com.mushka.timerclicker;
+
+          import android.accessibilityservice.AccessibilityService;
+          import android.accessibilityservice.GestureDescription;
+          import android.content.Intent;
+          import android.graphics.Path;
+          import android.view.accessibility.AccessibilityEvent;
+
+          public class TapService extends AccessibilityService {
+              static volatile TapService inst;
+
+              @Override
+              protected void onServiceConnected() {
+                  super.onServiceConnected();
+                  inst = this;
+              }
+
+              @Override
+              public boolean onUnbind(Intent intent) {
+                  inst = null;
+                  return super.onUnbind(intent);
+              }
+
+              @Override
+              public void onAccessibilityEvent(AccessibilityEvent event) {
+              }
+
+              @Override
+              public void onInterrupt() {
+              }
+
+              static boolean tap(float x, float y) {
+                  TapService s = inst;
+                  if (s == null) {
+                      return false;
+                  }
+                  Path p = new Path();
+                  p.moveTo(x, y);
+                  GestureDescription.StrokeDescription st = new GestureDescription.StrokeDescription(p, 0, 30);
+                  return s.dispatchGesture(new GestureDescription.Builder().addStroke(st).build(), null, null);
+              }
+          }
+          FILE_8_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/TimeUtil.java <<'FILE_9_END'
+          package com.mushka.timerclicker;
+
+          import java.text.ParseException;
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+          import java.util.TimeZone;
+
+          /** Время по Пекину (Asia/Shanghai, UTC+8, без перехода на летнее время). */
+          final class TimeUtil {
+              static final TimeZone BJ = TimeZone.getTimeZone("Asia/Shanghai");
+
+              private TimeUtil() {
+              }
+
+              static SimpleDateFormat fmt(String pattern) {
+                  SimpleDateFormat f = new SimpleDateFormat(pattern, Locale.US);
+                  f.setTimeZone(BJ);
+                  return f;
+              }
+
+              static String full(long ms) {
+                  return fmt("yyyy-MM-dd HH:mm:ss.SSS").format(new Date(ms));
+              }
+
+              static String date(long ms) {
+                  return fmt("yyyy-MM-dd").format(new Date(ms));
+              }
+
+              static String time(long ms) {
+                  return fmt("HH:mm:ss").format(new Date(ms));
+              }
+
+              static long parse(String date, String time, int ms) throws ParseException {
+                  SimpleDateFormat f = fmt("yyyy-MM-dd HH:mm:ss");
+                  f.setLenient(false);
+                  return f.parse(date.trim() + " " + time.trim()).getTime() + ms;
+              }
+
+              static String countdown(long left) {
+                  if (left < 0) {
+                      left = 0;
+                  }
+                  long totalSec = left / 1000;
+                  long h = totalSec / 3600;
+                  long m = (totalSec % 3600) / 60;
+                  long s = totalSec % 60;
+                  long tenth = (left % 1000) / 100;
+                  if (h > 0) {
+                      return String.format(Locale.US, "%d:%02d:%02d", h, m, s);
+                  }
+                  return String.format(Locale.US, "%02d:%02d.%d", m, s, tenth);
+              }
+          }
+          FILE_9_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/TimerService.java <<'FILE_10_END'
+          package com.mushka.timerclicker;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.pm.ServiceInfo;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.graphics.Paint;
+          import android.graphics.PixelFormat;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.os.PowerManager;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          import java.util.Locale;
+
+          public class TimerService extends Service {
+              static volatile TimerService inst;
+
+              private final Handler h = new Handler(Looper.getMainLooper());
+              private Cfg cfg;
+              private WindowManager wm;
+              private LinearLayout panel;
+              private WindowManager.LayoutParams panelLp;
+              private TextView tStatus;
+              private TextView bGo;
+              private View ovl;
+              private volatile boolean armed;
+              private volatile int tapsDone;
+              private volatile String result = "";
+              private volatile long targetMs;
+              private Thread worker;
+              private PowerManager.WakeLock wl;
+
+              @Override
+              public IBinder onBind(Intent in) {
+                  return null;
+              }
+
+              @Override
+              public int onStartCommand(Intent in, int flags, int startId) {
+                  if (in == null || "STOP".equals(in.getAction())) {
+                      stopSelf();
+                      return START_NOT_STICKY;
+                  }
+                  if (inst != null) {
+                      return START_NOT_STICKY;
+                  }
+                  cfg = new Cfg(this);
+                  startFg();
+                  wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                  showPanel();
+                  inst = this;
+                  h.post(ticker);
+                  return START_NOT_STICKY;
+              }
+
+              private void startFg() {
+                  NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                  nm.createNotificationChannel(new NotificationChannel("tc", "Тайм-кликер", NotificationManager.IMPORTANCE_LOW));
+                  Intent stop = new Intent(this, TimerService.class).setAction("STOP");
+                  PendingIntent pi = PendingIntent.getService(this, 1, stop, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                  Notification n = new Notification.Builder(this, "tc")
+                          .setSmallIcon(android.R.drawable.ic_menu_recent_history)
+                          .setContentTitle("Тайм-кликер работает")
+                          .setContentText("Нажми «Остановить», чтобы выключить")
+                          .addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Остановить", pi).build())
+                          .setOngoing(true)
+                          .build();
+                  if (Build.VERSION.SDK_INT >= 34) {
+                      startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                  } else {
+                      startForeground(1, n);
+                  }
+              }
+
+              private int dp(int v) {
+                  return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              private void toast(String s) {
+                  Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+              }
+
+              private WindowManager.LayoutParams params(int w, int hh, boolean keepOn) {
+                  int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                          | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                          | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                          | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
+                  if (keepOn) {
+                      flags |= WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON;
+                  }
+                  WindowManager.LayoutParams lp = new WindowManager.LayoutParams(w, hh,
+                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT);
+                  lp.gravity = Gravity.TOP | Gravity.START;
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+                  } else if (Build.VERSION.SDK_INT >= 28) {
+                      lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                  }
+                  return lp;
+              }
+
+              // ---------- панель ----------
+              private TextView btn(String text) {
+                  TextView t = new TextView(this);
+                  t.setText(text);
+                  t.setTextColor(Color.WHITE);
+                  t.setTextSize(14);
+                  t.setPadding(dp(10), dp(8), dp(10), dp(8));
+                  return t;
+              }
+
+              private void showPanel() {
+                  panel = new LinearLayout(this);
+                  panel.setOrientation(LinearLayout.HORIZONTAL);
+                  panel.setGravity(Gravity.CENTER_VERTICAL);
+                  panel.setPadding(dp(6), dp(4), dp(6), dp(4));
+                  GradientDrawable g = new GradientDrawable();
+                  g.setColor(0xEE171A2C);
+                  g.setCornerRadius(dp(22));
+                  g.setStroke(dp(1), 0x556C8CFF);
+                  panel.setBackground(g);
+
+                  TextView handle = btn("≡");
+                  tStatus = btn("");
+                  tStatus.setMinWidth(dp(120));
+                  TextView bPoint = btn("Точка");
+                  bGo = btn("Старт");
+                  TextView bX = btn("✕");
+                  panel.addView(handle);
+                  panel.addView(tStatus);
+                  panel.addView(bPoint);
+                  panel.addView(bGo);
+                  panel.addView(bX);
+
+                  bPoint.setOnClickListener(v -> startPoint());
+                  bGo.setOnClickListener(v -> {
+                      if (armed) {
+                          cancel();
+                      } else {
+                          arm();
+                      }
+                  });
+                  bX.setOnClickListener(v -> stopSelf());
+
+                  panelLp = params(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT, true);
+                  panelLp.x = dp(12);
+                  panelLp.y = dp(80);
+                  handle.setOnTouchListener(new View.OnTouchListener() {
+                      float dx;
+                      float dy;
+
+                      @Override
+                      public boolean onTouch(View v, MotionEvent e) {
+                          switch (e.getAction()) {
+                              case MotionEvent.ACTION_DOWN:
+                                  dx = e.getRawX() - panelLp.x;
+                                  dy = e.getRawY() - panelLp.y;
+                                  return true;
+                              case MotionEvent.ACTION_MOVE:
+                                  panelLp.x = (int) (e.getRawX() - dx);
+                                  panelLp.y = (int) (e.getRawY() - dy);
+                                  wm.updateViewLayout(panel, panelLp);
+                                  return true;
+                              default:
+                                  return true;
+                          }
+                      }
+                  });
+                  wm.addView(panel, panelLp);
+              }
+
+              private final Runnable ticker = new Runnable() {
+                  @Override
+                  public void run() {
+                      if (inst == null) {
+                          return;
+                      }
+                      long now = cfg.now();
+                      if (armed) {
+                          tStatus.setText("до нажатия " + TimeUtil.countdown(targetMs - now));
+                      } else if (!result.isEmpty()) {
+                          tStatus.setText(result);
+                      } else {
+                          tStatus.setText("Пекин " + TimeUtil.time(now));
+                      }
+                      bGo.setText(armed ? "Стоп" : "Старт");
+                      h.postDelayed(this, 100);
+                  }
+              };
+
+              // ---------- отсчёт и нажатие ----------
+              private void arm() {
+                  if (armed) {
+                      return;
+                  }
+                  if (TapService.inst == null) {
+                      toast("Включи службу доступности «Тайм-кликер»");
+                      return;
+                  }
+                  if (!cfg.hasPoint()) {
+                      toast("Сначала выбери кнопку: «Точка»");
+                      return;
+                  }
+                  long tg;
+                  try {
+                      tg = cfg.target();
+                  } catch (Exception e) {
+                      toast("Неверная дата или время");
+                      return;
+                  }
+                  if (tg - cfg.now() < 300) {
+                      toast("Это время уже прошло");
+                      return;
+                  }
+                  targetMs = tg;
+                  final long target = tg;
+                  armed = true;
+                  tapsDone = 0;
+                  result = "";
+                  PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                  wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "tc:timer");
+                  wl.acquire(Math.max(60000L, target - cfg.now() + 120000L));
+                  worker = new Thread(new Runnable() {
+                      @Override
+                      public void run() {
+                          runSchedule(target);
+                      }
+                  }, "tc-timer");
+                  worker.start();
+              }
+
+              private void cancel() {
+                  armed = false;
+                  if (worker != null) {
+                      worker.interrupt();
+                  }
+                  releaseWl();
+                  result = "";
+              }
+
+              private synchronized void releaseWl() {
+                  if (wl != null && wl.isHeld()) {
+                      wl.release();
+                  }
+                  wl = null;
+              }
+
+              private void runSchedule(long target) {
+                  try {
+                      long off = cfg.offset();
+                      long fireAt = target - cfg.lead();
+                      boolean resynced = false;
+                      while (armed) {
+                          long wait = fireAt - (System.currentTimeMillis() + off);
+                          if (wait <= 0) {
+                              break;
+                          }
+                          if (!resynced && wait < 25000 && wait > 8000) {
+                              resynced = true;
+                              long o = Ntp.sync();
+                              if (o != Ntp.FAIL) {
+                                  cfg.setOffset(o);
+                                  off = o;
+                              }
+                              continue;
+                          }
+                          if (wait > 200) {
+                              Thread.sleep(Math.min(wait - 150, 250));
+                          } else if (wait > 20) {
+                              Thread.sleep(1);
+                          } else {
+                              Thread.yield();
+                          }
+                      }
+                      if (!armed) {
+                          return;
+                      }
+                      int n = cfg.count();
+                      int gap = cfg.gap();
+                      int x = cfg.x();
+                      int y = cfg.y();
+                      long first = 0;
+                      for (int i = 0; i < n && armed; i++) {
+                          TapService.tap(x, y);
+                          if (i == 0) {
+                              first = System.currentTimeMillis() + off;
+                          }
+                          tapsDone++;
+                          if (i < n - 1) {
+                              pause(gap);
+                          }
+                      }
+                      result = String.format(Locale.US, "нажато %d, первое %+d мс", tapsDone, first - target);
+                  } catch (InterruptedException ignored) {
+                      return;
+                  } finally {
+                      armed = false;
+                      releaseWl();
+                  }
+              }
+
+              private void pause(int ms) throws InterruptedException {
+                  long end = System.nanoTime() + ms * 1000000L;
+                  while (armed) {
+                      long left = end - System.nanoTime();
+                      if (left <= 0) {
+                          return;
+                      }
+                      if (left > 3000000L) {
+                          Thread.sleep(1);
+                      } else {
+                          Thread.yield();
+                      }
+                  }
+              }
+
+              // ---------- выбор кнопки ----------
+              private void startPoint() {
+                  if (armed) {
+                      toast("Сначала останови отсчёт");
+                      return;
+                  }
+                  if (ovl != null) {
+                      return;
+                  }
+                  panel.setVisibility(View.INVISIBLE);
+                  PointView v = new PointView(this);
+                  ovl = v;
+                  wm.addView(v, params(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, true));
+              }
+
+              private void endPoint(boolean ok, int x, int y) {
+                  wm.removeView(ovl);
+                  ovl = null;
+                  panel.setVisibility(View.VISIBLE);
+                  if (ok) {
+                      cfg.setPoint(x, y);
+                      toast("Точка сохранена: " + x + ", " + y);
+                  }
+              }
+
+              private class PointView extends View {
+                  final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                  float px;
+                  float py;
+                  boolean has;
+
+                  PointView(Context c) {
+                      super(c);
+                      p.setTextSize(dp(15));
+                  }
+
+                  @Override
+                  protected void onDraw(Canvas c) {
+                      int[] o = new int[2];
+                      getLocationOnScreen(o);
+                      int w = getWidth();
+                      int hh = getHeight();
+                      int bh = dp(64);
+                      p.setStyle(Paint.Style.FILL);
+                      p.setColor(0x33000000);
+                      c.drawRect(0, 0, w, hh, p);
+                      p.setColor(0xCC000000);
+                      c.drawRect(0, 0, w, dp(40), p);
+                      p.setColor(Color.WHITE);
+                      c.drawText("Коснись кнопки, на которую нужно нажимать", dp(12), dp(26), p);
+                      p.setColor(0xEE171A2C);
+                      c.drawRect(0, hh - bh, w, hh, p);
+                      p.setColor(Color.WHITE);
+                      c.drawText("Отмена", dp(24), hh - bh / 2f + dp(5), p);
+                      if (!has) {
+                          return;
+                      }
+                      float vx = px - o[0];
+                      float vy = py - o[1];
+                      p.setStyle(Paint.Style.STROKE);
+                      p.setStrokeWidth(dp(2));
+                      p.setColor(0xFFFF3B5C);
+                      c.drawCircle(vx, vy, dp(18), p);
+                      c.drawLine(vx - dp(28), vy, vx + dp(28), vy, p);
+                      c.drawLine(vx, vy - dp(28), vx, vy + dp(28), p);
+                      p.setStyle(Paint.Style.FILL);
+                      p.setColor(0xFF4C6FFF);
+                      c.drawRect(w / 2f, hh - bh, w, hh, p);
+                      p.setColor(Color.WHITE);
+                      c.drawText("Выбрать (" + (int) px + ", " + (int) py + ")", w / 2f + dp(16), hh - bh / 2f + dp(5), p);
+                  }
+
+                  @Override
+                  public boolean onTouchEvent(MotionEvent e) {
+                      boolean inBtn = e.getY() > getHeight() - dp(64);
+                      switch (e.getAction()) {
+                          case MotionEvent.ACTION_DOWN:
+                          case MotionEvent.ACTION_MOVE:
+                              if (!inBtn) {
+                                  px = e.getRawX();
+                                  py = e.getRawY();
+                                  has = true;
+                                  invalidate();
+                              }
+                              return true;
+                          case MotionEvent.ACTION_UP:
+                              if (inBtn) {
+                                  if (e.getX() < getWidth() / 2f) {
+                                      endPoint(false, 0, 0);
+                                  } else if (has) {
+                                      endPoint(true, (int) px, (int) py);
+                                  }
+                              }
+                              return true;
+                          default:
+                              return true;
+                      }
+                  }
+              }
+
+              @Override
+              public void onDestroy() {
+                  inst = null;
+                  cancel();
+                  h.removeCallbacksAndMessages(null);
+                  try {
+                      if (ovl != null && ovl.getParent() != null) {
+                          wm.removeView(ovl);
+                      }
+                  } catch (Exception ignored) {
+                  }
+                  try {
+                      if (panel != null) {
+                          wm.removeView(panel);
+                      }
+                  } catch (Exception ignored) {
+                  }
+                  super.onDestroy();
+              }
+          }
+          FILE_10_END
+          mkdir -p app/src/main/java/com/mushka/timerclicker
+          cat > app/src/main/java/com/mushka/timerclicker/Ui.java <<'FILE_11_END'
+          package com.mushka.timerclicker;
+
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+
+          final class Ui {
+              static final int BG = 0xFF0E1020;
+
+              private Ui() {
+              }
+
+              static int dp(Context c, int v) {
+                  return (int) (v * c.getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              static TextView text(Context c, String s, int sp) {
+                  TextView t = new TextView(c);
+                  t.setText(s);
+                  t.setTextSize(sp);
+                  t.setTextColor(Color.WHITE);
+                  t.setPadding(0, dp(c, 6), 0, dp(c, 6));
+                  return t;
+              }
+
+              static Button button(Context c, String s) {
+                  Button b = new Button(c);
+                  b.setText(s);
+                  return b;
+              }
+
+              static LinearLayout column(Context c) {
+                  LinearLayout l = new LinearLayout(c);
+                  l.setOrientation(LinearLayout.VERTICAL);
+                  int p = dp(c, 16);
+                  l.setPadding(p, p, p, p);
+                  return l;
+              }
+
+              static ScrollView scroll(Context c, View child) {
+                  ScrollView s = new ScrollView(c);
+                  s.setBackgroundColor(BG);
+                  s.addView(child);
+                  return s;
+              }
+
+              static boolean isLight(int col) {
+                  return (Color.red(col) * 299 + Color.green(col) * 587 + Color.blue(col) * 114) / 1000 > 140;
+              }
+          }
+          FILE_11_END
+          mkdir -p app/src/main/res/drawable
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'FILE_12_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path
+                  android:fillColor="#1B1E30"
+                  android:pathData="M0,0h108v108h-108z" />
+              <path
+                  android:fillColor="#4C6FFF"
+                  android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0" />
+              <path
+                  android:fillColor="#FFFFFF"
+                  android:pathData="M51,32h6v24l14,8l-3,5l-17,-10z" />
+          </vector>
+          FILE_12_END
+          mkdir -p app/src/main/res/values
+          cat > app/src/main/res/values/strings.xml <<'FILE_13_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="acc_desc">Нужна, чтобы приложение само нажимало на экран в заданное время.</string>
+          </resources>
+          FILE_13_END
+          mkdir -p app/src/main/res/xml
+          cat > app/src/main/res/xml/tap_service.xml <<'FILE_14_END'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowStateChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:canPerformGestures="true"
+              android:description="@string/acc_desc"
+              android:notificationTimeout="100" />
+          FILE_14_END
+
+      - name: Сборка APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Готовый файл
+        run: cp app/build/outputs/apk/debug/app-debug.apk timer-clicker.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: timerclicker-${{ github.run_number }}
+          name: Тайм-кликер, сборка ${{ github.run_number }}
+          files: timer-clicker.apk
